@@ -22,6 +22,7 @@ dist-no-debug: package3 $(CURRENT_DIRECTORY)/$(ATMOSPHERE_OUT_DIR)
 	mkdir $(DIST_DIR)
 	mkdir $(DIST_DIR)/atmosphere
 	mkdir $(DIST_DIR)/switch
+	mkdir $(DIST_DIR)/switchbros
 	mkdir -p $(DIST_DIR)/atmosphere/config_templates
 	mkdir -p $(DIST_DIR)/atmosphere/config
 	mkdir -p $(DIST_DIR)/atmosphere/flags
@@ -29,6 +30,7 @@ dist-no-debug: package3 $(CURRENT_DIRECTORY)/$(ATMOSPHERE_OUT_DIR)
 	mkdir -p $(DIST_DIR)/switch/daybreak
 	mkdir -p $(DIST_DIR)/atmosphere/exefs_patches
 	mkdir -p $(DIST_DIR)/atmosphere/kip_patches
+	mkdir -p $(DIST_DIR)/switchbros/sys-modul/4IFIR/atmosphere/kips
 	cp fusee/$(ATMOSPHERE_BOOT_OUT_DIR)/package3 $(DIST_DIR)/atmosphere/package3
 	cp config_templates/stratosphere.ini $(DIST_DIR)/atmosphere/config_templates/stratosphere.ini
 	cp config_templates/override_config.ini $(DIST_DIR)/atmosphere/config/override_config.ini
@@ -68,6 +70,7 @@ dist-no-debug: package3 $(CURRENT_DIRECTORY)/$(ATMOSPHERE_OUT_DIR)
 	rm -r $(DIST_DIR)/stratosphere_romfs
 	cp troposphere/daybreak/daybreak.nro $(DIST_DIR)/switch/daybreak/daybreak.nro
 	cp ../SwitchBros_BasisPaket/bootloader/update.bin $(DIST_DIR)/atmosphere/reboot_payload.bin
+	cp stratosphere/loader/out/nintendo_nx_arm64_armv8a/release/loader.kip $(DIST_DIR)/switchbros/sys-modul/4IFIR/atmosphere/kips/loader.kip
 	cp fusee/$(ATMOSPHERE_BOOT_OUT_DIR)/fusee.bin $(DIST_DIR)/bootloader/payloads/fusee.bin
 	cd $(DIST_DIR); ls; rm -rf ../atmosphere-$(ATMOSPHERE_VERSION).zip; ls
 	cd $(DIST_DIR); zip -r ../SwitchBros-O-Sphere-$(ATMOSPHERE_VERSION)+hbl-2.4.3+hbmenu-3.5.1.zip ./*; cd ../;
