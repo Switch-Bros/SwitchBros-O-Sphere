@@ -963,7 +963,7 @@ namespace dbk {
 /*            if (g_exfat_supported) {*/
 /*                next_menu = std::make_shared<ChooseExfatMenu>(g_current_menu);*/
 /*            } else {*/
-            next_menu = std::make_shared<WarningMenu>(g_current_menu, std::make_shared<InstallUpdateMenu>(g_current_menu), "Bereit um Firmware zu installieren", "Sicher das du fortfahren willst?");
+                next_menu = std::make_shared<WarningMenu>(g_current_menu, std::make_shared<InstallUpdateMenu>(g_current_menu), "Bereit um Firmware zu installieren", "Sicher das du fortfahren willst?");
 /*            }*/
 
             if (g_reset_to_factory) {
