@@ -15,123 +15,315 @@
  */
 #pragma once
 #include <mesosphere/kern_common.hpp>
-#include <mesosphere/kern_k_memory_block.hpp>
-#include <mesosphere/kern_k_page_table_manager.hpp>
+#include <mesosphere/kern_k_light_lock.hpp>
+#include <mesosphere/kern_k_memory_layout.hpp>
+#include <mesosphere/kern_k_page_heap.hpp>
 
 namespace ams::kern {
 
-    class KMemoryBlockManagerUpdateAllocator {
+    class KPageGroup;
+
+    class KMemoryManager {
         public:
-            static constexpr size_t MaxBlocks = 2;
+            enum Pool {
+                Pool_Application     = 0,
+                Pool_Applet          = 1,
+                Pool_System          = 2,
+                Pool_SystemNonSecure = 3,
+
+                Pool_Count,
+
+                Pool_Shift = 4,
+                Pool_Mask  = (0xF << Pool_Shift),
+
+                /* Aliases. */
+                Pool_Unsafe = Pool_Application,
+                Pool_Secure = Pool_System,
+            };
+
+            enum Direction {
+                Direction_FromFront = 0,
+                Direction_FromBack  = 1,
+
+                Direction_Shift = 0,
+                Direction_Mask  = (0xF << Direction_Shift),
+            };
+
+            static constexpr size_t MaxManagerCount = 10;
         private:
-            KMemoryBlock *m_blocks[MaxBlocks];
-            size_t m_index;
-            KMemoryBlockSlabManager *m_slab_manager;
-        private:
-            ALWAYS_INLINE Result Initialize(size_t num_blocks) {
-                /* Check num blocks. */
-                MESOSPHERE_ASSERT(num_blocks <= MaxBlocks);
+            class Impl {
+                private:
+                    using RefCount = u16;
+                public:
+                    static size_t CalculateManagementOverheadSize(size_t region_size);
 
-                /* Set index. */
-                m_index = MaxBlocks - num_blocks;
-
-                /* Allocate the blocks. */
-                for (size_t i = 0; i < num_blocks && i < MaxBlocks; ++i) {
-                    m_blocks[m_index + i] = m_slab_manager->Allocate();
-                    R_UNLESS(m_blocks[m_index + i] != nullptr, svc::ResultOutOfResource());
-                }
-
-                R_SUCCEED();
-            }
-        public:
-            KMemoryBlockManagerUpdateAllocator(Result *out_result, KMemoryBlockSlabManager *sm, size_t num_blocks = MaxBlocks) : m_blocks(), m_index(MaxBlocks), m_slab_manager(sm) {
-                *out_result = this->Initialize(num_blocks);
-            }
-
-            ~KMemoryBlockManagerUpdateAllocator() {
-                for (const auto &block : m_blocks) {
-                    if (block != nullptr) {
-                        m_slab_manager->Free(block);
+                    static constexpr size_t CalculateOptimizedProcessOverheadSize(size_t region_size) {
+                        return (util::AlignUp((region_size / PageSize), BITSIZEOF(u64)) / BITSIZEOF(u64)) * sizeof(u64);
                     }
-                }
+                private:
+                    KPageHeap m_heap;
+                    RefCount *m_page_reference_counts;
+                    KVirtualAddress m_management_region;
+                    Pool m_pool;
+                    Impl *m_next;
+                    Impl *m_prev;
+                public:
+                    Impl() : m_heap(), m_page_reference_counts(), m_management_region(Null<KVirtualAddress>), m_pool(), m_next(), m_prev() { /* ... */ }
+
+                    size_t Initialize(KPhysicalAddress address, size_t size, KVirtualAddress management, KVirtualAddress management_end, Pool p);
+
+                    KPhysicalAddress AllocateBlock(s32 index, bool random) { return m_heap.AllocateBlock(index, random); }
+                    KPhysicalAddress AllocateAligned(s32 index, size_t num_pages, size_t align_pages) { return m_heap.AllocateAligned(index, num_pages, align_pages); }
+                    void Free(KPhysicalAddress addr, size_t num_pages) { m_heap.Free(addr, num_pages); }
+
+                    void SetInitialUsedHeapSize(size_t reserved_size) { m_heap.SetInitialUsedSize(reserved_size); }
+
+                    void InitializeOptimizedMemory() { std::memset(GetVoidPointer(m_management_region), 0, CalculateOptimizedProcessOverheadSize(m_heap.GetSize())); }
+
+                    void TrackUnoptimizedAllocation(KPhysicalAddress block, size_t num_pages);
+                    void TrackOptimizedAllocation(KPhysicalAddress block, size_t num_pages);
+
+                    bool ProcessOptimizedAllocation(KPhysicalAddress block, size_t num_pages, u8 fill_pattern);
+
+                    constexpr Pool GetPool() const { return m_pool; }
+                    constexpr size_t GetSize() const { return m_heap.GetSize(); }
+                    constexpr KPhysicalAddress GetEndAddress() const { return m_heap.GetEndAddress(); }
+
+                    size_t GetFreeSize() const { return m_heap.GetFreeSize(); }
+
+                    void DumpFreeList() const { return m_heap.DumpFreeList(); }
+
+                    constexpr size_t GetPageOffset(KPhysicalAddress address)      const { return m_heap.GetPageOffset(address); }
+                    constexpr size_t GetPageOffsetToEnd(KPhysicalAddress address) const { return m_heap.GetPageOffsetToEnd(address); }
+
+                    constexpr void SetNext(Impl *n) { m_next = n; }
+                    constexpr void SetPrev(Impl *n) { m_prev = n; }
+                    constexpr Impl *GetNext() const { return m_next; }
+                    constexpr Impl *GetPrev() const { return m_prev; }
+
+                    void OpenFirst(KPhysicalAddress address, size_t num_pages) {
+                        size_t index = this->GetPageOffset(address);
+                        const size_t end = index + num_pages;
+                        while (index < end) {
+                            const RefCount ref_count = (++m_page_reference_counts[index]);
+                            MESOSPHERE_ABORT_UNLESS(ref_count == 1);
+
+                            index++;
+                        }
+                    }
+
+                    void Open(KPhysicalAddress address, size_t num_pages) {
+                        size_t index = this->GetPageOffset(address);
+                        const size_t end = index + num_pages;
+                        while (index < end) {
+                            const RefCount ref_count = (++m_page_reference_counts[index]);
+                            MESOSPHERE_ABORT_UNLESS(ref_count > 1);
+
+                            index++;
+                        }
+                    }
+
+                    void Close(KPhysicalAddress address, size_t num_pages) {
+                        size_t index = this->GetPageOffset(address);
+                        const size_t end = index + num_pages;
+
+                        size_t free_start = 0;
+                        size_t free_count = 0;
+                        while (index < end) {
+                            MESOSPHERE_ABORT_UNLESS(m_page_reference_counts[index] > 0);
+                            const RefCount ref_count = (--m_page_reference_counts[index]);
+
+                            /* Keep track of how many zero refcounts we see in a row, to minimize calls to free. */
+                            if (ref_count == 0) {
+                                if (free_count > 0) {
+                                    free_count++;
+                                } else {
+                                    free_start = index;
+                                    free_count = 1;
+                                }
+                            } else {
+                                if (free_count > 0) {
+                                    this->Free(m_heap.GetAddress() + free_start * PageSize, free_count);
+                                    free_count = 0;
+                                }
+                            }
+
+                            index++;
+                        }
+
+                        if (free_count > 0) {
+                            this->Free(m_heap.GetAddress() + free_start * PageSize, free_count);
+                        }
+                    }
+            };
+        private:
+            KLightLock m_pool_locks[Pool_Count];
+            Impl *m_pool_managers_head[Pool_Count];
+            Impl *m_pool_managers_tail[Pool_Count];
+            Impl m_managers[MaxManagerCount];
+            size_t m_num_managers;
+            u64 m_optimized_process_ids[Pool_Count];
+            bool m_has_optimized_process[Pool_Count];
+            s32 m_min_heap_indexes[Pool_Count];
+        private:
+            Impl &GetManager(KPhysicalAddress address) {
+                return m_managers[KMemoryLayout::GetPhysicalLinearRegion(address).GetAttributes()];
             }
 
-            KMemoryBlock *Allocate() {
-                MESOSPHERE_ABORT_UNLESS(m_index < MaxBlocks);
-                MESOSPHERE_ABORT_UNLESS(m_blocks[m_index] != nullptr);
-                KMemoryBlock *block = nullptr;
-                std::swap(block, m_blocks[m_index++]);
-                return block;
+            const Impl &GetManager(KPhysicalAddress address) const {
+                return m_managers[KMemoryLayout::GetPhysicalLinearRegion(address).GetAttributes()];
             }
 
-            void Free(KMemoryBlock *block) {
-                MESOSPHERE_ABORT_UNLESS(m_index <= MaxBlocks);
-                MESOSPHERE_ABORT_UNLESS(block != nullptr);
-                if (m_index == 0) {
-                    m_slab_manager->Free(block);
+            constexpr Impl *GetFirstManager(Pool pool, Direction dir) {
+                return dir == Direction_FromBack ? m_pool_managers_tail[pool] : m_pool_managers_head[pool];
+            }
+
+            constexpr Impl *GetNextManager(Impl *cur, Direction dir) {
+                if (dir == Direction_FromBack) {
+                    return cur->GetPrev();
                 } else {
-                    m_blocks[--m_index] = block;
+                    return cur->GetNext();
                 }
             }
-    };
 
-    class KMemoryBlockManager {
+            Result AllocatePageGroupImpl(KPageGroup *out, size_t num_pages, Pool pool, Direction dir, bool unoptimized, bool random, s32 min_heap_index);
         public:
-            using MemoryBlockTree = util::IntrusiveRedBlackTreeBaseTraits<KMemoryBlock>::TreeType<KMemoryBlock>;
-            using MemoryBlockLockFunction = void (KMemoryBlock::*)(KMemoryPermission new_perm, bool left, bool right);
-            using iterator = MemoryBlockTree::iterator;
-            using const_iterator = MemoryBlockTree::const_iterator;
-        private:
-            MemoryBlockTree m_memory_block_tree;
-            KProcessAddress m_start_address;
-            KProcessAddress m_end_address;
-        private:
-            void CoalesceForUpdate(KMemoryBlockManagerUpdateAllocator *allocator, KProcessAddress address, size_t num_pages);
-        public:
-            constexpr explicit KMemoryBlockManager(util::ConstantInitializeTag) : m_memory_block_tree(), m_start_address(Null<KProcessAddress>), m_end_address(Null<KProcessAddress>) { /* ... */ }
-
-            explicit KMemoryBlockManager() { /* ... */ }
-
-            iterator end() { return m_memory_block_tree.end(); }
-            const_iterator end() const { return m_memory_block_tree.end(); }
-            const_iterator cend() const { return m_memory_block_tree.cend(); }
-
-            Result Initialize(KProcessAddress st, KProcessAddress nd, KMemoryBlockSlabManager *slab_manager);
-            void   Finalize(KMemoryBlockSlabManager *slab_manager);
-
-            KProcessAddress FindFreeArea(KProcessAddress region_start, size_t region_num_pages, size_t num_pages, size_t alignment, size_t offset, size_t guard_pages) const;
-
-            void Update(KMemoryBlockManagerUpdateAllocator *allocator, KProcessAddress address, size_t num_pages, KMemoryState state, KMemoryPermission perm, KMemoryAttribute attr, KMemoryBlockDisableMergeAttribute set_disable_attr, KMemoryBlockDisableMergeAttribute clear_disable_attr);
-            void UpdateLock(KMemoryBlockManagerUpdateAllocator *allocator, KProcessAddress address, size_t num_pages, MemoryBlockLockFunction lock_func, KMemoryPermission perm);
-
-            void UpdateIfMatch(KMemoryBlockManagerUpdateAllocator *allocator, KProcessAddress address, size_t num_pages, KMemoryState test_state, KMemoryPermission test_perm, KMemoryAttribute test_attr, KMemoryState state, KMemoryPermission perm, KMemoryAttribute attr, KMemoryBlockDisableMergeAttribute set_disable_attr, KMemoryBlockDisableMergeAttribute clear_disable_attr);
-
-            void UpdateAttribute(KMemoryBlockManagerUpdateAllocator *allocator, KProcessAddress address, size_t num_pages, u32 mask, u32 attr);
-
-            iterator FindIterator(KProcessAddress address) const {
-                return m_memory_block_tree.find(KMemoryBlock(util::ConstantInitialize, address, 1, KMemoryState_Free, KMemoryPermission_None, KMemoryAttribute_None));
+            KMemoryManager()
+                : m_pool_locks(), m_pool_managers_head(), m_pool_managers_tail(), m_managers(), m_num_managers(), m_optimized_process_ids(), m_has_optimized_process(), m_min_heap_indexes()
+            {
+                /* ... */
             }
 
-            const KMemoryBlock *FindBlock(KProcessAddress address) const {
-                if (const_iterator it = this->FindIterator(address); it != m_memory_block_tree.end()) {
-                    return std::addressof(*it);
+            NOINLINE void Initialize(KVirtualAddress management_region, size_t management_region_size, const u32 *min_align_shifts);
+
+            NOINLINE Result InitializeOptimizedMemory(u64 process_id, Pool pool);
+            NOINLINE void FinalizeOptimizedMemory(u64 process_id, Pool pool);
+
+            NOINLINE KPhysicalAddress AllocateAndOpenContinuous(size_t num_pages, size_t align_pages, u32 option);
+            NOINLINE Result AllocateAndOpen(KPageGroup *out, size_t num_pages, size_t align_pages, u32 option);
+            NOINLINE Result AllocateForProcess(KPageGroup *out, size_t num_pages, u32 option, u64 process_id, u8 fill_pattern);
+
+            Pool GetPool(KPhysicalAddress address) const {
+                return this->GetManager(address).GetPool();
+            }
+
+            void Open(KPhysicalAddress address, size_t num_pages) {
+                /* Repeatedly open references until we've done so for all pages. */
+                while (num_pages) {
+                    auto &manager = this->GetManager(address);
+                    const size_t cur_pages = std::min(num_pages, manager.GetPageOffsetToEnd(address));
+
+                    {
+                        KScopedLightLock lk(m_pool_locks[manager.GetPool()]);
+                        manager.Open(address, cur_pages);
+                    }
+
+                    num_pages -= cur_pages;
+                    address += cur_pages * PageSize;
                 }
-
-                return nullptr;
             }
 
-            /* Debug. */
-            bool CheckState() const;
-            void DumpBlocks() const;
-    };
+            void OpenFirst(KPhysicalAddress address, size_t num_pages) {
+                /* Repeatedly open references until we've done so for all pages. */
+                while (num_pages) {
+                    auto &manager = this->GetManager(address);
+                    const size_t cur_pages = std::min(num_pages, manager.GetPageOffsetToEnd(address));
 
-    class KScopedMemoryBlockManagerAuditor {
-        private:
-            KMemoryBlockManager *m_manager;
+                    {
+                        KScopedLightLock lk(m_pool_locks[manager.GetPool()]);
+                        manager.OpenFirst(address, cur_pages);
+                    }
+
+                    num_pages -= cur_pages;
+                    address += cur_pages * PageSize;
+                }
+            }
+
+            void Close(KPhysicalAddress address, size_t num_pages) {
+                /* Repeatedly close references until we've done so for all pages. */
+                while (num_pages) {
+                    auto &manager = this->GetManager(address);
+                    const size_t cur_pages = std::min(num_pages, manager.GetPageOffsetToEnd(address));
+
+                    {
+                        KScopedLightLock lk(m_pool_locks[manager.GetPool()]);
+                        manager.Close(address, cur_pages);
+                    }
+
+                    num_pages -= cur_pages;
+                    address += cur_pages * PageSize;
+                }
+            }
+
+            size_t GetSize() {
+                size_t total = 0;
+                for (size_t i = 0; i < m_num_managers; i++) {
+                    total += m_managers[i].GetSize();
+                }
+                return total;
+            }
+
+            size_t GetSize(Pool pool) {
+                constexpr Direction GetSizeDirection = Direction_FromFront;
+                size_t total = 0;
+                for (auto *manager = this->GetFirstManager(pool, GetSizeDirection); manager != nullptr; manager = this->GetNextManager(manager, GetSizeDirection)) {
+                    total += manager->GetSize();
+                }
+                return total;
+            }
+
+            size_t GetFreeSize() {
+                size_t total = 0;
+                for (size_t i = 0; i < m_num_managers; i++) {
+                    KScopedLightLock lk(m_pool_locks[m_managers[i].GetPool()]);
+                    total += m_managers[i].GetFreeSize();
+                }
+                return total;
+            }
+
+            size_t GetFreeSize(Pool pool) {
+                KScopedLightLock lk(m_pool_locks[pool]);
+
+                constexpr Direction GetSizeDirection = Direction_FromFront;
+                size_t total = 0;
+                for (auto *manager = this->GetFirstManager(pool, GetSizeDirection); manager != nullptr; manager = this->GetNextManager(manager, GetSizeDirection)) {
+                    total += manager->GetFreeSize();
+                }
+                return total;
+            }
+
+            void DumpFreeList(Pool pool) {
+                KScopedLightLock lk(m_pool_locks[pool]);
+
+                constexpr Direction DumpDirection = Direction_FromFront;
+                for (auto *manager = this->GetFirstManager(pool, DumpDirection); manager != nullptr; manager = this->GetNextManager(manager, DumpDirection)) {
+                    manager->DumpFreeList();
+                }
+            }
+
+            size_t GetMinimumAlignment(Pool pool) {
+                return KPageHeap::GetBlockSize(m_min_heap_indexes[pool]);
+            }
         public:
-            explicit ALWAYS_INLINE KScopedMemoryBlockManagerAuditor(KMemoryBlockManager *m) : m_manager(m) { MESOSPHERE_AUDIT(m_manager->CheckState()); }
-            explicit ALWAYS_INLINE KScopedMemoryBlockManagerAuditor(KMemoryBlockManager &m) : KScopedMemoryBlockManagerAuditor(std::addressof(m)) { /* ... */ }
-            ALWAYS_INLINE ~KScopedMemoryBlockManagerAuditor() { MESOSPHERE_AUDIT(m_manager->CheckState()); }
+            static size_t CalculateManagementOverheadSize(size_t region_size) {
+                return Impl::CalculateManagementOverheadSize(region_size);
+            }
+
+            static constexpr ALWAYS_INLINE u32 EncodeOption(Pool pool, Direction dir) {
+                return (pool << Pool_Shift) | (dir << Direction_Shift);
+            }
+
+            static constexpr ALWAYS_INLINE Pool GetPool(u32 option) {
+                return static_cast<Pool>((option & Pool_Mask) >> Pool_Shift);
+            }
+
+            static constexpr ALWAYS_INLINE Direction GetDirection(u32 option) {
+                return static_cast<Direction>((option & Direction_Mask) >> Direction_Shift);
+            }
+
+            static constexpr ALWAYS_INLINE std::tuple<Pool, Direction> DecodeOption(u32 option) {
+                return std::make_tuple(GetPool(option), GetDirection(option));
+            }
     };
 
 }
