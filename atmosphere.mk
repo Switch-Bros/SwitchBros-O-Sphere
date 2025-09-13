@@ -29,6 +29,7 @@ dist-no-debug: package3 $(CURRENT_DIRECTORY)/$(ATMOSPHERE_OUT_DIR)
 	mkdir -p $(DIST_DIR)/switch/daybreak
 	mkdir -p $(DIST_DIR)/atmosphere/exefs_patches
 	mkdir -p $(DIST_DIR)/atmosphere/kip_patches
+	cp fusee/$(ATMOSPHERE_BOOT_OUT_DIR)/fusee.bin $(DIST_DIR)/atmosphere/reboot_payload.bin
 	cp fusee/$(ATMOSPHERE_BOOT_OUT_DIR)/package3 $(DIST_DIR)/atmosphere/package3
 	cp config_templates/stratosphere.ini $(DIST_DIR)/atmosphere/config_templates/stratosphere.ini
 	cp config_templates/override_config.ini $(DIST_DIR)/atmosphere/config/override_config.ini
@@ -69,7 +70,7 @@ dist-no-debug: package3 $(CURRENT_DIRECTORY)/$(ATMOSPHERE_OUT_DIR)
 	rm -r $(DIST_DIR)/atmosphere/config_templates
 	rm -r $(DIST_DIR)/stratosphere_romfs
 	cp troposphere/daybreak/daybreak.nro $(DIST_DIR)/switch/daybreak/daybreak.nro
-	cp ../SwitchBros_BasisPaket/bootloader/update.bin $(DIST_DIR)/atmosphere/reboot_payload.bin
+#	cp ../SwitchBros_BasisPaket/bootloader/update.bin $(DIST_DIR)/atmosphere/reboot_payload.bin
 	cp fusee/$(ATMOSPHERE_BOOT_OUT_DIR)/fusee.bin $(DIST_DIR)/bootloader/payloads/fusee.bin
 	#cd $(DIST_DIR); ls; rm -rf ../atmosphere-$(ATMOSPHERE_VERSION).zip; ls
 #	cd $(DIST_DIR); zip -qr ../atmosphere-$(ATMOSPHERE_VERSION).zip ./*; cd ../;
