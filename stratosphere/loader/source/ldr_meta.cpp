@@ -113,7 +113,7 @@ namespace ams::ldr {
 
         Result ValidateAcidSignature(Meta *meta, ncm::ContentMetaPlatform platform, bool unk_unused) {
             /* Loader did not check signatures prior to 10.0.0. */
-            {
+            if (hos::GetVersion() < hos::Version_10_0_0) {
                 meta->check_verification_data = false;
                 R_SUCCEED();
             }
@@ -207,20 +207,6 @@ namespace ams::ldr {
         meta->acid->program_id_min = loc.program_id;
         meta->acid->program_id_max = loc.program_id;
         meta->aci->program_id      = loc.program_id;
-
-        if (loc.program_id == ncm::TinfoilId::Tinfoil) {
-            if (hos::GetVersion() >= hos::Version_19_0_0) {
-                FixDebugCapabilityForHbl(static_cast<util::BitPack32 *>(meta->acid_kac), meta->acid->kac_size / sizeof(util::BitPack32));
-                FixDebugCapabilityForHbl(static_cast<util::BitPack32 *>(meta->aci_kac),  meta->aci->kac_size  / sizeof(util::BitPack32));
-            }
-        }
-
-        if (loc.program_id == ncm::TinfoilId::TinfoilForwarder) {
-            if (hos::GetVersion() >= hos::Version_19_0_0) {
-                FixDebugCapabilityForHbl(static_cast<util::BitPack32 *>(meta->acid_kac), meta->acid->kac_size / sizeof(util::BitPack32));
-                FixDebugCapabilityForHbl(static_cast<util::BitPack32 *>(meta->aci_kac),  meta->aci->kac_size  / sizeof(util::BitPack32));
-            }
-        }
 
         /* For HBL, we need to copy some information from the base meta. */
         if (status.IsHbl()) {

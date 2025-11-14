@@ -265,8 +265,6 @@ namespace ams::nxboot {
                         return ams::TargetFirmware_19_0_0;
                     } else if (std::memcmp(package1 + 0x10, "20250206", 8) == 0) {
                         return ams::TargetFirmware_20_0_0;
-                    } else if (std::memcmp(package1 + 0x10, "20251009", 8) == 0) {
-                        return ams::TargetFirmware_21_0_0;
                     }
                     break;
                 default:
@@ -411,9 +409,8 @@ namespace ams::nxboot {
                     /* If we should, save the current warmboot firmware. */
                     UpdateWarmbootPath(expected_fuses);
                     if (!IsFileExist(warmboot_path)) {
-                        /* Try to create the directory/file, allowing them to fail (if already exist). */
-                        static_cast<void>(fs::CreateDirectory("sdmc:/warmboot_mariko"));
-                        static_cast<void>(fs::CreateFile(warmboot_path, warmboot_src_size));
+                        fs::CreateDirectory("sdmc:/warmboot_mariko");
+                        fs::CreateFile(warmboot_path, warmboot_src_size);
 
                         Result result;
                         fs::FileHandle file;

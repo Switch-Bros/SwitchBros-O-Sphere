@@ -119,13 +119,15 @@ namespace ams::kern::arch::arm64 {
         MESOSPHERE_UNUSED(core_id);
     }
 
-    void KPageTable::InitializeForKernel(void *table, KVirtualAddress start, KVirtualAddress end) {
+    Result KPageTable::InitializeForKernel(void *table, KVirtualAddress start, KVirtualAddress end) {
         /* Initialize basic fields. */
         m_asid = 0;
         m_manager = Kernel::GetSystemSystemResource().GetPageTableManagerPointer();
 
         /* Initialize the base page table. */
-        KPageTableBase::InitializeForKernel(true, table, start, end);
+        MESOSPHERE_R_ABORT_UNLESS(KPageTableBase::InitializeForKernel(true, table, start, end));
+
+        R_SUCCEED();
     }
 
     Result KPageTable::InitializeForProcess(ams::svc::CreateProcessFlag flags, bool from_back, KMemoryManager::Pool pool, KProcessAddress code_address, size_t code_size, KSystemResource *system_resource, KResourceLimit *resource_limit, size_t process_index) {
@@ -151,7 +153,7 @@ namespace ams::kern::arch::arm64 {
         R_SUCCEED();
     }
 
-    void KPageTable::Finalize() {
+    Result KPageTable::Finalize() {
         /* Only process tables should be finalized. */
         MESOSPHERE_ASSERT(!this->IsKernel());
 
@@ -269,6 +271,8 @@ namespace ams::kern::arch::arm64 {
             /* Perform inherited finalization. */
             KPageTableBase::Finalize();
         }
+
+        R_SUCCEED();
     }
 
     Result KPageTable::OperateImpl(PageLinkedList *page_list, KProcessAddress virt_addr, size_t num_pages, KPhysicalAddress phys_addr, bool is_pa_valid, const KPageProperties properties, OperationType operation, bool reuse_ll) {
@@ -938,7 +942,7 @@ namespace ams::kern::arch::arm64 {
                 /* If we should flush entries, do so. */
                 if ((apply_option & ApplyOption_FlushDataCache) != 0) {
                     if (IsHeapPhysicalAddress(next_entry.phys_addr)) {
-                        MESOSPHERE_R_ABORT_UNLESS(cpu::FlushDataCache(GetVoidPointer(GetHeapVirtualAddress(next_entry.phys_addr)), next_entry.block_size));
+                        cpu::FlushDataCache(GetVoidPointer(GetHeapVirtualAddress(next_entry.phys_addr)), next_entry.block_size);
                     }
                 }
 

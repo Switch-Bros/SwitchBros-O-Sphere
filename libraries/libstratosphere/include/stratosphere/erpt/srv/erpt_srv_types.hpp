@@ -124,10 +124,6 @@ namespace ams::erpt::srv {
         }
     }
 
-    constexpr inline bool IsValidCategory(CategoryId id) {
-        return FindCategoryIndex(id).has_value();
-    }
-
     constexpr inline CategoryId ConvertFieldToCategory(FieldId id) {
         const auto index = FindFieldIndex(id);
         AMS_ASSERT(index.has_value());

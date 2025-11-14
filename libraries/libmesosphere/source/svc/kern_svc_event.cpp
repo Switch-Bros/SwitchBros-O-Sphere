@@ -29,8 +29,7 @@ namespace ams::kern::svc {
             KScopedAutoObject event = handle_table.GetObject<KEvent>(event_handle);
             R_UNLESS(event.IsNotNull(), svc::ResultInvalidHandle());
 
-            event->Signal();
-            R_SUCCEED();
+            R_RETURN(event->Signal());
         }
 
         Result ClearEvent(ams::svc::Handle event_handle) {
@@ -41,8 +40,7 @@ namespace ams::kern::svc {
             {
                 KScopedAutoObject event = handle_table.GetObject<KEvent>(event_handle);
                 if (event.IsNotNull()) {
-                    event->Clear();
-                    R_SUCCEED();
+                    R_RETURN(event->Clear());
                 }
             }
 
@@ -51,11 +49,10 @@ namespace ams::kern::svc {
                 KScopedAutoObject readable_event = handle_table.GetObject<KReadableEvent>(event_handle);
                 if (readable_event.IsNotNull()) {
                     if (auto * const interrupt_event = readable_event->DynamicCast<KInterruptEvent *>(); interrupt_event != nullptr) {
-                        interrupt_event->Clear();
+                        R_RETURN(interrupt_event->Clear());
                     } else {
-                        readable_event->Clear();
+                        R_RETURN(readable_event->Clear());
                     }
-                    R_SUCCEED();
                 }
             }
 
